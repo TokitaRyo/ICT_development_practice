@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>NEON BOUND - リアル物理バウンド・シミュレーター</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Matter.js 物理エンジン -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#22c55e',
+              600: '#16a34a',
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #060913;
+      color: #f3f4f6;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* グラスモフィズム UI スタイル */
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.65);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+    }
+
+    .glass-card {
+      background: rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .glass-button {
+      background: rgba(255, 255, 255, 0.07);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .glass-button:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.3);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    }
+    .glass-button:active {
+      transform: translateY(1px);
+    }
+
+    /* メインバウンドボタン (メガネオン) */
+    .bounce-mega-btn {
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      box-shadow: 0 0 30px rgba(168, 85, 247, 0.55), inset 0 1px 1px rgba(255,255,255,0.4);
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bounce-mega-btn:hover {
+      box-shadow: 0 0 45px rgba(236, 72, 153, 0.8), inset 0 1px 1px rgba(255,255,255,0.6);
+      transform: translateY(-3px) scale(1.02);
+    }
+    .bounce-mega-btn:active {
+      transform: translateY(2px) scale(0.97);
+      box-shadow: 0 0 20px rgba(168, 85, 247, 0.4);
+    }
+
+    /* カスタムスライダー */
+    input[type=range] {
+      -webkit-appearance: none;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      height: 6px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 18px;
+      width: 18px;
+      border-radius: 50%;
+      background: #c084fc;
+      box-shadow: 0 0 10px #c084fc;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    input[type=range]::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    /* アニメーション用 */
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 0.3; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.1); }
+    }
+    .bg-glow-1 {
+      animation: pulse-slow 8s infinite ease-in-out;
+    }
+    .bg-glow-2 {
+      animation: pulse-slow 10s infinite ease-in-out 4s;
+    }
+
+    /* Canvas タッチ操作防止 */
+    canvas {
+      touch-action: none;
+    }
+  </style>
+</head>
+<body class="w-screen h-screen relative flex flex-col justify-between overflow-hidden">
+
+  <!-- 背景アンビエントネオン発光 -->
+  <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px] pointer-events-none bg-glow-1"></div>
+  <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-600/20 rounded-full blur-[120px] pointer-events-none bg-glow-2"></div>
+
+  <!-- キャンバス描画エリア -->
+  <canvas id="physics-canvas" class="absolute inset-0 z-0"></canvas>
+
+  <!-- 上部ヘッダー (ステータス・タイトル) -->
+  <header class="relative z-10 w-full p-4 md:p-6 flex justify-between items-center pointer-events-none">
+    <!-- タイトルロゴ -->
+    <div class="glass-panel px-4 py-2.5 rounded-2xl flex items-center gap-3 pointer-events-auto border border-white/10">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-500/30">
+        <i data-lucide="activity" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <h1 class="font-extrabold text-base md:text-lg tracking-wide bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+          NEON BOUND
+        </h1>
+        <p class="text-[10px] text-slate-400 font-mono leading-none">REAL-TIME PHYSICS LAB</p>
+      </div>
+    </div>
+
+    <!-- カウンター & アクション -->
+    <div class="flex items-center gap-3 pointer-events-auto">
+      <div class="glass-panel px-4 py-2 rounded-xl flex items-center gap-4 text-xs font-mono">
+        <div>
+          <span class="text-slate-400 block text-[9px]">BALLS</span>
+          <span id="ball-count" class="text-indigo-400 font-bold text-sm md:text-base">0</span>
+        </div>
+        <div class="w-px h-6 bg-white/10"></div>
+        <div>
+          <span class="text-slate-400 block text-[9px]">FPS</span>
+          <span id="fps-count" class="text-emerald-400 font-bold text-sm md:text-base">60</span>
+        </div>
+      </div>
+
+      <!-- 設定トグルボタン (モバイル向け) -->
+      <button id="toggle-settings-btn" class="glass-button p-2.5 rounded-xl text-slate-200 hover:text-white md:hidden">
+        <i data-lucide="sliders" class="w-5 h-5"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- 中央上部: タップヒント -->
+  <div class="relative z-10 text-center pointer-events-none opacity-60 transition-opacity duration-500" id="tap-hint">
+    <p class="text-xs font-mono text-slate-300 tracking-wider flex items-center justify-center gap-2">
+      <i data-lucide="mouse-pointer" class="w-3.5 h-3.5 animate-bounce"></i>
+      画面タップで衝撃波 / ドラッグでボールを掴む
+    </p>
+  </div>
+
+  <!-- 下部操作コントローラー & メインボタン -->
+  <footer class="relative z-10 w-full p-4 md:p-6 flex flex-col md:flex-row items-center justify-between gap-4 pointer-events-none">
+    
+    <!-- 左側: クイックツールバー -->
+    <div class="flex items-center gap-2 pointer-events-auto order-2 md:order-1 flex-wrap justify-center">
+      <button id="add-1-btn" class="glass-button px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 text-slate-200 hover:text-white">
+        <i data-lucide="plus" class="w-4 h-4 text-emerald-400"></i>
+        <span>+1 ボール</span>
+      </button>
+      
+      <button id="add-10-btn" class="glass-button px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 text-slate-200 hover:text-white">
+        <i data-lucide="sparkles" class="w-4 h-4 text-amber-400"></i>
+        <span>+10 連打</span>
+      </button>
+
+      <button id="rain-btn" class="glass-button px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 text-slate-200 hover:text-white transition-colors" data-active="false">
+        <i data-lucide="cloud-rain" class="w-4 h-4 text-cyan-400"></i>
+        <span id="rain-text">レインOFF</span>
+      </button>
+
+      <button id="clear-btn" class="glass-button px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 text-rose-300 hover:text-rose-100 hover:border-rose-500/30">
+        <i data-lucide="trash-2" class="w-4 h-4"></i>
+        <span>クリア</span>
+      </button>
+    </div>
+
+    <!-- 中央: 巨大メインバウンドボタン -->
+    <div class="pointer-events-auto order-1 md:order-2 w-full md:w-auto flex justify-center">
+      <button id="bounce-main-btn" class="bounce-mega-btn w-full md:w-72 py-4 px-8 rounded-2xl font-extrabold text-base md:text-lg text-white flex items-center justify-center gap-3 cursor-pointer tracking-wider">
+        <i data-lucide="zap" class="w-6 h-6 fill-white text-white animate-pulse"></i>
+        <span>跳ねあげる！</span>
+      </button>
+    </div>
+
+    <!-- 右側: パラメータ設定パネル (PC常時/スマホ折りたたみ) -->
+    <div id="settings-panel" class="glass-panel p-4 rounded-2xl w-full md:w-80 pointer-events-auto order-3 hidden md:block transition-all duration-300">
+      <div class="flex items-center justify-between pb-3 mb-3 border-b border-white/10">
+        <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="settings-2" class="w-3.5 h-3.5 text-purple-400"></i>
+          物理パラメータ
+        </h3>
+        <button id="reset-params-btn" class="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono">リセット</button>
+      </div>
+
+      <div class="space-y-3.5 text-xs">
+        <!-- 重力 -->
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-slate-400">重力 (Gravity)</span>
+            <span id="val-gravity" class="font-mono text-purple-300 font-bold">1.0</span>
+          </div>
+          <input type="range" id="slider-gravity" min="0" max="2.5" step="0.1" value="1.0" class="w-full">
+        </div>
+
+        <!-- 弾力性 (反発力) -->
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-slate-400">弾力性 (Bounce)</span>
+            <span id="val-bounce" class="font-mono text-pink-300 font-bold">0.85</span>
+          </div>
+          <input type="range" id="slider-bounce" min="0.1" max="1.0" step="0.05" value="0.85" class="w-full">
+        </div>
+
+        <!-- 空気抵抗 -->
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-slate-400">空気抵抗 (Drag)</span>
+            <span id="val-drag" class="font-mono text-cyan-300 font-bold">0.005</span>
+          </div>
+          <input type="range" id="slider-drag" min="0.000" max="0.030" step="0.002" value="0.005" class="w-full">
+        </div>
+
+        <!-- タップモード -->
+        <div class="pt-2 border-t border-white/10">
+          <span class="text-slate-400 block mb-1.5">画面タップ時の動作</span>
+          <div class="grid grid-cols-2 gap-1.5">
+            <button id="mode-shockwave-btn" class="glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all bg-purple-500/20 border-purple-400/50 text-white">
+              💥 衝撃波
+            </button>
+            <button id="mode-spawn-btn" class="glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all text-slate-400">
+              ⚽ ボール追加
+            </button>
+          </div>
+        </div>
+
+        <!-- カラーテーマ選択 -->
+        <div>
+          <span class="text-slate-400 block mb-1.5">カラーテーマ</span>
+          <select id="theme-select" class="w-full glass-card bg-slate-900/80 border border-white/10 rounded-lg p-2 text-xs text-slate-200 outline-none focus:border-purple-400">
+            <option value="cyberpunk">Cyberpunk Neon</option>
+            <option value="sunset">Sunset Flare</option>
+            <option value="electric">Electric Lime</option>
+            <option value="prism">Prism Rainbow</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- JS スクリプト構成 -->
+  <script>
+    // --- アイコン初期化 ---
+    lucide.createIcons();
+
+    // --- カラーテーマ設定定義 ---
+    const COLOR_THEMES = {
+      cyberpunk: [
+        { main: '#00f0ff', glow: 'rgba(0, 240, 255, 0.6)' }, // Neon Cyan
+        { main: '#ff007f', glow: 'rgba(255, 0, 127, 0.6)' }, // Neon Pink
+        { main: '#7000ff', glow: 'rgba(112, 0, 255, 0.6)' }, // Purple
+        { main: '#ffe600', glow: 'rgba(255, 230, 0, 0.6)' }  // Neon Yellow
+      ],
+      sunset: [
+        { main: '#ff4b1f', glow: 'rgba(255, 75, 31, 0.6)' },
+        { main: '#ff9000', glow: 'rgba(255, 144, 0, 0.6)' },
+        { main: '#e81cff', glow: 'rgba(232, 28, 255, 0.6)' },
+        { main: '#40c9ff', glow: 'rgba(64, 201, 255, 0.6)' }
+      ],
+      electric: [
+        { main: '#39ff14', glow: 'rgba(57, 255, 20, 0.6)' }, // Neon Green
+        { main: '#00e5ff', glow: 'rgba(0, 229, 255, 0.6)' },
+        { main: '#ccff00', glow: 'rgba(204, 255, 0, 0.6)' },
+        { main: '#00ffaa', glow: 'rgba(0, 255, 170, 0.6)' }
+      ],
+      prism: [
+        { main: '#ff3366', glow: 'rgba(255, 51, 102, 0.6)' },
+        { main: '#33ccff', glow: 'rgba(51, 204, 255, 0.6)' },
+        { main: '#33ff99', glow: 'rgba(51, 255, 153, 0.6)' },
+        { main: '#ffcc33', glow: 'rgba(255, 204, 51, 0.6)' },
+        { main: '#b573ff', glow: 'rgba(181, 115, 255, 0.6)' }
+      ]
+    };
+
+    let currentTheme = 'cyberpunk';
+
+    // --- Matter.js 物理エンジンセットアップ ---
+    const { Engine, World, Bodies, Body, Vector, Composite, Mouse, MouseConstraint, Events } = Matter;
+
+    const engine = Engine.create({
+      gravity: { x: 0, y: 1.0, scale: 0.001 }
+    });
+
+    const canvas = document.getElementById('physics-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width = canvas.width = window.innerWidth;
+    let height = canvas.height = window.innerHeight;
+
+    // 外壁 (静的ボディ) の定義
+    const wallOptions = { isStatic: true, restitution: 0.9, friction: 0.1 };
+    const wallThickness = 100;
+
+    let ground = Bodies.rectangle(width / 2, height + wallThickness / 2, width * 2, wallThickness, wallOptions);
+    let leftWall = Bodies.rectangle(-wallThickness / 2, height / 2, wallThickness, height * 2, wallOptions);
+    let rightWall = Bodies.rectangle(width + wallThickness / 2, height / 2, wallThickness, height * 2, wallOptions);
+    let ceiling = Bodies.rectangle(width / 2, -wallThickness / 2, width * 2, wallThickness, wallOptions);
+
+    World.add(engine.world, [ground, leftWall, rightWall, ceiling]);
+
+    // マウス/タッチインタラクションの追加
+    const mouse = Mouse.create(canvas);
+    const mouseConstraint = MouseConstraint.create(engine, {
+      mouse: mouse,
+      constraint: {
+        stiffness: 0.2,
+        render: { visible: false }
+      }
+    });
+    World.add(engine.world, mouseConstraint);
+
+    // --- エフェクト & パーティクル管理 ---
+    const particles = [];
+    const shockwaves = [];
+
+    // パーティクル生成 (衝突時など)
+    function createImpactParticles(x, y, color, count = 8, speedFactor = 1) {
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = (Math.random() * 4 + 2) * speedFactor;
+        particles.push({
+          x: x,
+          y: y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          size: Math.random() * 4 + 2,
+          color: color,
+          alpha: 1.0,
+          decay: Math.random() * 0.03 + 0.02
+        });
+      }
+    }
+
+    // 衝撃波エフェクト追加
+    function createShockwave(x, y, maxRadius = 150) {
+      shockwaves.push({
+        x: x,
+        y: y,
+        radius: 10,
+        maxRadius: maxRadius,
+        alpha: 0.8,
+        color: '#a855f7'
+      });
+    }
+
+    // 衝突イベントハンドラー
+    Events.on(engine, 'collisionStart', (event) => {
+      event.pairs.forEach(pair => {
+        const speedA = Vector.magnitude(pair.bodyA.velocity);
+        const speedB = Vector.magnitude(pair.bodyB.velocity);
+        const relativeSpeed = Math.abs(speedA - speedB);
+
+        if (relativeSpeed > 2.5) {
+          const contact = pair.activeContacts[0];
+          if (contact) {
+            const x = contact.vertex.x;
+            const y = contact.vertex.y;
+            const color = pair.bodyA.customColor || pair.bodyB.customColor || '#a855f7';
+            createImpactParticles(x, y, color, Math.min(Math.floor(relativeSpeed * 2), 15), relativeSpeed * 0.5);
+          }
+        }
+      });
+    });
+
+    // --- ボール生成関数 ---
+    let ballIdCounter = 0;
+    const balls = []; // カスタムメタデータを保持
+
+    function addBall(x, y, radius = null, velocity = null) {
+      if (balls.length >= 200) { // パフォーマンス維持用制限
+        const oldest = balls.shift();
+        World.remove(engine.world, oldest.body);
+      }
+
+      const r = radius || (Math.random() * 12 + 18); // 直径 36〜60px 程度
+      const themeList = COLOR_THEMES[currentTheme];
+      const colorScheme = themeList[Math.floor(Math.random() * themeList.length)];
+
+      const currentBounce = parseFloat(document.getElementById('slider-bounce').value);
+      const currentDrag = parseFloat(document.getElementById('slider-drag').value);
+
+      const body = Bodies.circle(x, y, r, {
+        restitution: currentBounce,
+        frictionAir: currentDrag,
+        friction: 0.05,
+        density: 0.002
+      });
+
+      if (velocity) {
+        Body.setVelocity(body, velocity);
+      }
+
+      body.customColor = colorScheme.main;
+      body.customGlow = colorScheme.glow;
+      body.radius = r;
+
+      World.add(engine.world, body);
+
+      balls.push({
+        id: ++ballIdCounter,
+        body: body,
+        color: colorScheme.main,
+        glow: colorScheme.glow,
+        radius: r,
+        trail: []
+      });
+
+      updateBallCount();
+    }
+
+    // --- 跳ね上げ (メインアクション) ---
+    function bounceAllBalls() {
+      if (balls.length === 0) {
+        // ボールがなければ15個生成して爆発的に跳ね上げる
+        for (let i = 0; i < 12; i++) {
+          const x = width * 0.2 + (width * 0.6 * (i / 12)) + (Math.random() * 20 - 10);
+          const y = height - 100 - (Math.random() * 50);
+          addBall(x, y);
+        }
+      }
+
+      // ボトムからのインパルス波形
+      const forceY = -0.15; // 上向き強力インパルス
+
+      balls.forEach(b => {
+        const body = b.body;
+        // 水平方向にも少しランダムな力を加えて散らす
+        const forceX = (Math.random() - 0.5) * 0.05;
+        const mass = body.mass;
+
+        Body.applyImpulse(body, body.position, {
+          x: forceX * mass,
+          y: forceY * mass
+        });
+
+        // 回転力を加える
+        Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.3);
+
+        // バウンドエフェクト
+        createImpactParticles(body.position.x, body.position.y, b.color, 6, 1.2);
+      });
+
+      // 画面中央下部に大きな衝撃波エフェクト
+      createShockwave(width / 2, height - 50, width * 0.6);
+    }
+
+    // --- UIカウント更新 ---
+    function updateBallCount() {
+      document.getElementById('ball-count').textContent = balls.length;
+    }
+
+    // --- リサイズ処理 ---
+    window.addEventListener('resize', () => {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+
+      // 壁の位置再設定
+      Body.setPosition(ground, { x: width / 2, y: height + wallThickness / 2 });
+      Body.setPosition(rightWall, { x: width + wallThickness / 2, y: height / 2 });
+    });
+
+    // --- タップ/クリック インタラクション ---
+    let tapMode = 'shockwave'; // 'shockwave' または 'spawn'
+
+    canvas.addEventListener('pointerdown', (e) => {
+      // MouseConstraintでボールを掴んでいる場合は衝撃波を出さない
+      if (mouseConstraint.body) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (tapMode === 'shockwave') {
+        createShockwave(x, y, 180);
+        // 周囲のボールを弾き飛ばす
+        balls.forEach(b => {
+          const body = b.body;
+          const dir = Vector.sub(body.position, { x, y });
+          const dist = Vector.magnitude(dir);
+          if (dist < 220 && dist > 0) {
+            const forceMagnitude = (1 - dist / 220) * 0.12 * body.mass;
+            const normalized = Vector.normalise(dir);
+            Body.applyImpulse(body, body.position, Vector.mult(normalized, forceMagnitude));
+          }
+        });
+      } else {
+        // スポーンモード
+        addBall(x, y, null, { x: (Math.random() - 0.5) * 8, y: -Math.random() * 8 - 4 });
+      }
+    });
+
+    // --- 描画＆更新メインループ ---
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let fps = 60;
+
+    function renderLoop(time) {
+      requestAnimationFrame(renderLoop);
+
+      // FPS計算
+      frameCount++;
+      if (time - lastTime >= 1000) {
+        fps = Math.round((frameCount * 1000) / (time - lastTime));
+        document.getElementById('fps-count').textContent = fps;
+        frameCount = 0;
+        lastTime = time;
+      }
+
+      // 物理エンジンのステップ更新 (60fps想定)
+      Engine.update(engine, 1000 / 60);
+
+      // レインモード処理
+      if (isRainActive && Math.random() < 0.3 && balls.length < 180) {
+        addBall(Math.random() * width, -20);
+      }
+
+      // Canvasクリア
+      ctx.clearRect(0, 0, width, height);
+
+      // 1. 衝撃波リング描画
+      for (let i = shockwaves.length - 1; i >= 0; i--) {
+        const sw = shockwaves[i];
+        sw.radius += (sw.maxRadius - sw.radius) * 0.12 + 2;
+        sw.alpha -= 0.025;
+
+        if (sw.alpha <= 0 || sw.radius >= sw.maxRadius) {
+          shockwaves.splice(i, 1);
+          continue;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+        ctx.strokeStyle = sw.color;
+        ctx.lineWidth = Math.max(1, (1 - sw.radius / sw.maxRadius) * 8);
+        ctx.globalAlpha = sw.alpha;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = sw.color;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 2. ボール & 軌跡描画
+      balls.forEach(b => {
+        const body = b.body;
+        const pos = body.position;
+        const angle = body.angle;
+
+        // 軌跡更新
+        b.trail.push({ x: pos.x, y: pos.y });
+        if (b.trail.length > 8) b.trail.shift();
+
+        // 軌跡描画
+        if (b.trail.length > 1) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(b.trail[0].x, b.trail[0].y);
+          for (let p = 1; p < b.trail.length; p++) {
+            ctx.lineTo(b.trail[p].x, b.trail[p].y);
+          }
+          ctx.strokeStyle = b.glow;
+          ctx.lineWidth = b.radius * 0.6;
+          ctx.lineCap = 'round';
+          ctx.globalAlpha = 0.18;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // ボール本体描画
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(angle);
+
+        // ネオン外形発光
+        ctx.shadowBlur = 16;
+        ctx.shadowColor = b.glow;
+
+        // グラデーション球体
+        const gradient = ctx.createRadialGradient(
+          -b.radius * 0.3, -b.radius * 0.3, b.radius * 0.1,
+          0, 0, b.radius
+        );
+        gradient.addColorStop(0, '#ffffff');
+        gradient.addColorStop(0.3, b.color);
+        gradient.addColorStop(1, '#0f172a');
+
+        ctx.beginPath();
+        ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // 回転の方向を示す内部ライン演出
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(b.radius * 0.7, 0);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.restore();
+      });
+
+      // 3. パーティクル描画
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= p.decay;
+
+        if (p.alpha <= 0) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.alpha;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = p.color;
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // --- UI コントロール & イベント連携 ---
+
+    // 1. メインバウンドボタン
+    document.getElementById('bounce-main-btn').addEventListener('click', () => {
+      bounceAllBalls();
+    });
+
+    // 2. +1 ボール
+    document.getElementById('add-1-btn').addEventListener('click', () => {
+      addBall(width / 2 + (Math.random() * 80 - 40), 100, null, {
+        x: (Math.random() - 0.5) * 6,
+        y: -Math.random() * 4 - 2
+      });
+    });
+
+    // 3. +10 連打
+    document.getElementById('add-10-btn').addEventListener('click', () => {
+      for (let i = 0; i < 10; i++) {
+        setTimeout(() => {
+          addBall(
+            Math.random() * (width - 100) + 50,
+            -20,
+            null,
+            { x: (Math.random() - 0.5) * 4, y: Math.random() * 2 }
+          );
+        }, i * 50);
+      }
+    });
+
+    // 4. レインモード
+    let isRainActive = false;
+    const rainBtn = document.getElementById('rain-btn');
+    const rainText = document.getElementById('rain-text');
+
+    rainBtn.addEventListener('click', () => {
+      isRainActive = !isRainActive;
+      if (isRainActive) {
+        rainBtn.classList.add('bg-cyan-500/20', 'border-cyan-400/50', 'text-cyan-200');
+        rainText.textContent = 'レイン ON';
+      } else {
+        rainBtn.classList.remove('bg-cyan-500/20', 'border-cyan-400/50', 'text-cyan-200');
+        rainText.textContent = 'レイン OFF';
+      }
+    });
+
+    // 5. クリア
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      balls.forEach(b => World.remove(engine.world, b.body));
+      balls.length = 0;
+      updateBallCount();
+    });
+
+    // 6. 物理パラメータ変更
+    // 重力
+    const sliderGravity = document.getElementById('slider-gravity');
+    sliderGravity.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      engine.gravity.y = val;
+      document.getElementById('val-gravity').textContent = val.toFixed(1);
+    });
+
+    // 弾力性 (Bounce)
+    const sliderBounce = document.getElementById('slider-bounce');
+    sliderBounce.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      document.getElementById('val-bounce').textContent = val.toFixed(2);
+      balls.forEach(b => {
+        b.body.restitution = val;
+      });
+    });
+
+    // 空気抵抗 (Drag)
+    const sliderDrag = document.getElementById('slider-drag');
+    sliderDrag.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      document.getElementById('val-drag').textContent = val.toFixed(3);
+      balls.forEach(b => {
+        b.body.frictionAir = val;
+      });
+    });
+
+    // パラメータリセット
+    document.getElementById('reset-params-btn').addEventListener('click', () => {
+      sliderGravity.value = 1.0;
+      engine.gravity.y = 1.0;
+      document.getElementById('val-gravity').textContent = '1.0';
+
+      sliderBounce.value = 0.85;
+      document.getElementById('val-bounce').textContent = '0.85';
+
+      sliderDrag.value = 0.005;
+      document.getElementById('val-drag').textContent = '0.005';
+
+      balls.forEach(b => {
+        b.body.restitution = 0.85;
+        b.body.frictionAir = 0.005;
+      });
+    });
+
+    // 7. タップモード切替
+    const shockwaveBtn = document.getElementById('mode-shockwave-btn');
+    const spawnBtn = document.getElementById('mode-spawn-btn');
+
+    shockwaveBtn.addEventListener('click', () => {
+      tapMode = 'shockwave';
+      shockwaveBtn.className = 'glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all bg-purple-500/20 border-purple-400/50 text-white';
+      spawnBtn.className = 'glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all text-slate-400';
+    });
+
+    spawnBtn.addEventListener('click', () => {
+      tapMode = 'spawn';
+      spawnBtn.className = 'glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all bg-purple-500/20 border-purple-400/50 text-white';
+      shockwaveBtn.className = 'glass-button py-1.5 px-2 rounded-lg text-[11px] font-medium text-center transition-all text-slate-400';
+    });
+
+    // 8. テーマ変更
+    document.getElementById('theme-select').addEventListener('change', (e) => {
+      currentTheme = e.target.value;
+    });
+
+    // 9. スマホ用設定パネルトグル
+    const toggleSettingsBtn = document.getElementById('toggle-settings-btn');
+    const settingsPanel = document.getElementById('settings-panel');
+
+    toggleSettingsBtn.addEventListener('click', () => {
+      settingsPanel.classList.toggle('hidden');
+    });
+
+    // --- 初期セットアップ ---
+    window.addEventListener('load', () => {
+      // 初期ボールを10個投入
+      for (let i = 0; i < 10; i++) {
+        addBall(
+          width * 0.2 + Math.random() * (width * 0.6),
+          height * 0.3 + (Math.random() * 100)
+        );
+      }
+
+      // ループ開始
+      requestAnimationFrame(renderLoop);
+
+      // タップヒントを5秒後に薄くする
+      setTimeout(() => {
+        document.getElementById('tap-hint').style.opacity = '0.2';
+      }, 5000);
+    });
+  </script>
+</body>
+</html>
