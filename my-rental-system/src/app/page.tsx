@@ -15,6 +15,7 @@ export interface Item {
   name: string;
   serial_number: string;
   price: number;
+  stock_count?: number;
 }
 
 export interface UserSettings {
