@@ -1,175 +1,267 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import Header from '@/components/Header';
 import ItemTable from '@/components/ItemTable';
 import ItemModal from '@/components/ItemModal';
 import FilterModal from '@/components/FilterModal';
 import LayoutSettingsModal from '@/components/LayoutSettingsModal';
-
-export interface Item {
-  id: string;
-  item_number: string;
-  maker: string;
-  name: string;
-  serial_number: string;
-  price: number;
-  stock_count?: number;
-}
-
-export interface UserSettings {
-  theme: 'indigo' | 'dark' | 'blue' | 'green';
-  view_mode: 'table' | 'card';
-  density: 'compact' | 'standard' | 'relaxed';
-  visible_columns: string[];
-}
+import {
+  DEFAULT_FILTER,
+  DEFAULT_SETTINGS,
+  type Item,
+  type ItemFilter,
+  type ItemInput,
+  type UserSettings,
+} from '@/lib/types';
 
 export default function Home() {
-  const [session, setSession] = useState<any>(null);
+  // 認証
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  // データ
   const [items, setItems] = useState<Item[]>([]);
+  const [errorMessage, setErrorMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterMaker, setFilterMaker] = useState('');
-  
-  // モーダル制御状態
+  const [filter, setFilter] = useState<ItemFilter>(DEFAULT_FILTER);
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+
+  // モーダル
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // カスタマイズ設定
-  const [settings, setSettings] = useState<UserSettings>({
-    theme: 'indigo',
-    view_mode: 'table',
-    density: 'standard',
-    visible_columns: ['item_number', 'maker', 'name', 'serial_number', 'price', 'stock_count'],
-  });
+  const userId = session?.user.id;
 
-  // 1. 初期セッションチェック
+  // 1. ログイン状態の監視
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchItems();
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthReady(true);
     });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  // 2. データ取得処理
-  const fetchItems = async () => {
+  // 2. 物品一覧の取得
+  const fetchItems = useCallback(async () => {
     const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
-    if (!error && data) setItems(data);
-  };
+    if (error) {
+      setErrorMessage('物品の取得に失敗しました: ' + error.message);
+      return;
+    }
+    setErrorMessage('');
+    setItems((data ?? []) as Item[]);
+  }, []);
 
-  // ログイン処理
+  // 3. ログイン後に一覧とレイアウト設定を読み込む
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    (async () => {
+      const [itemsRes, settingsRes] = await Promise.all([
+        supabase.from('items').select('*').order('created_at', { ascending: false }),
+        supabase
+          .from('user_settings')
+          .select('theme, view_mode, density, visible_columns')
+          .eq('user_id', userId)
+          .maybeSingle(),
+      ]);
+      if (cancelled) return;
+      if (itemsRes.error) {
+        setErrorMessage('物品の取得に失敗しました: ' + itemsRes.error.message);
+      } else {
+        setErrorMessage('');
+        setItems((itemsRes.data ?? []) as Item[]);
+      }
+      const saved = settingsRes.data;
+      if (saved) {
+        setSettings({
+          ...DEFAULT_SETTINGS,
+          ...saved,
+          visible_columns: Array.isArray(saved.visible_columns)
+            ? saved.visible_columns
+            : DEFAULT_SETTINGS.visible_columns,
+        } as UserSettings);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const makers = useMemo(
+    () => Array.from(new Set(items.map((i) => i.maker).filter(Boolean))).sort(),
+    [items],
+  );
+
+  const filteredItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return items.filter((item) => {
+      const text = [item.name, item.maker, item.item_number, item.serial_number ?? ''].join(' ').toLowerCase();
+      const stock = item.stock_count ?? 0;
+      const matchesSearch = !q || text.includes(q);
+      const matchesMaker = !filter.maker || item.maker === filter.maker;
+      const matchesStock = filter.stock === 'all' || (filter.stock === 'in' ? stock > 0 : stock === 0);
+      return matchesSearch && matchesMaker && matchesStock;
+    });
+  }, [items, searchQuery, filter]);
+
+  const isFiltered = filter.maker !== '' || filter.stock !== 'all';
+
+  // ログイン
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) alert('ログインエラー: ' + error.message);
-    else {
-      setSession(data.session);
-      fetchItems();
-    }
+    setLoggingIn(true);
+    setLoginError('');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoggingIn(false);
+    if (error) setLoginError('ログインに失敗しました: ' + error.message);
   };
 
-  // 登録・更新処理
-  const handleSaveItem = async (formData: Partial<Item>) => {
-    if (editingItem) {
-      await supabase.from('items').update(formData).eq('id', editingItem.id);
-    } else {
-      await supabase.from('items').insert([formData]);
-    }
-    fetchItems();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setItems([]);
+    setSettings(DEFAULT_SETTINGS);
+    setFilter(DEFAULT_FILTER);
+    setSearchQuery('');
+  };
+
+  // 登録・変更（成功時 null / 失敗時メッセージ）
+  const handleSaveItem = async (formData: ItemInput): Promise<string | null> => {
+    const { error } = editingItem
+      ? await supabase.from('items').update(formData).eq('id', editingItem.id)
+      : await supabase.from('items').insert([formData]);
+    if (error) return '保存に失敗しました: ' + error.message;
+    await fetchItems();
     setIsItemModalOpen(false);
     setEditingItem(null);
+    return null;
   };
 
-  // ① ログイン画面の表示 (未認証時)
+  // レイアウト設定の保存（user_settings に upsert）
+  const handleSaveSettings = async (newSettings: UserSettings) => {
+    setSettings(newSettings);
+    setIsSettingsOpen(false);
+    if (!userId) return;
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert({ user_id: userId, ...newSettings, updated_at: new Date().toISOString() });
+    if (error) setErrorMessage('設定の保存に失敗しました: ' + error.message);
+  };
+
+  if (!authReady) return null;
+
+  // ① ログイン画面
   if (!session) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <form onSubmit={handleLogin} className="bg-white p-8 rounded-lg shadow-md w-96">
+      <div className="app flex items-center justify-center">
+        <form onSubmit={handleLogin} className="surface p-8 w-96 shadow-md">
           <h1 className="text-xl font-bold mb-6 text-center">物貸し借りシステム ログイン</h1>
           <div className="mb-4">
             <label className="block text-sm font-medium mb-1">ID (Email)</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border p-2 rounded" required />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="field" required />
           </div>
           <div className="mb-6">
             <label className="block text-sm font-medium mb-1">Ps (Password)</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border p-2 rounded" required />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="field"
+              required
+            />
           </div>
-          <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">ログイン</button>
+          {loginError && <p className="error-text text-sm mb-4">{loginError}</p>}
+          <button type="submit" disabled={loggingIn} className="btn btn-primary w-full">
+            {loggingIn ? 'ログイン中...' : 'ログイン'}
+          </button>
         </form>
       </div>
     );
   }
 
-  // フィルタリング処理
-  const filteredItems = items.filter(item => {
-    const matchesSearch = item.name.includes(searchQuery) || item.maker.includes(searchQuery);
-    const matchesFilter = filterMaker ? item.maker === filterMaker : true;
-    return matchesSearch && matchesFilter;
-  });
-
-  // ② メイン画面表示
+  // ② 一覧画面
   return (
-    <div className={`min-h-screen theme-${settings.theme} bg-gray-50`}>
-      <Header onOpenSettings={() => setIsSettingsOpen(true)} onLogout={() => supabase.auth.signOut().then(() => setSession(null))} />
+    <div className={`app theme-${settings.theme}`}>
+      <Header email={session.user.email} onOpenSettings={() => setIsSettingsOpen(true)} onLogout={handleLogout} />
 
       <main className="max-w-7xl mx-auto p-6">
-        {/* 操作エリア (検索 / しぼり込み / 新規登録) */}
-        <div className="flex flex-wrap gap-4 justify-between items-center mb-6 bg-white p-4 rounded shadow-sm">
+        {errorMessage && <p className="error-text text-sm mb-4">{errorMessage}</p>}
+
+        <div className="surface flex flex-wrap gap-4 justify-between items-center mb-6 p-4">
           <input
             type="text"
-            placeholder="けんさく"
+            placeholder="けんさく（商品名・メーカー・番号・製造番号）"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="border p-2 rounded w-64"
+            className="field sm:w-80"
           />
-          <div className="flex gap-2">
-            <button onClick={() => setIsFilterModalOpen(true)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">
-              しぼり込み
+          <div className="flex items-center gap-2">
+            <span className="muted text-sm">{filteredItems.length} / {items.length} 件</span>
+            <button onClick={() => setIsFilterModalOpen(true)} className="btn btn-secondary">
+              しぼり込み{isFiltered && '（適用中）'}
             </button>
-            <button onClick={() => { setEditingItem(null); setIsItemModalOpen(true); }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+            <button
+              onClick={() => {
+                setEditingItem(null);
+                setIsItemModalOpen(true);
+              }}
+              className="btn btn-primary"
+            >
               新規登録
             </button>
           </div>
         </div>
 
-        {/* ②-の拡大・一覧テーブル表示 */}
         <ItemTable
           items={filteredItems}
           settings={settings}
-          onEdit={(item) => { setEditingItem(item); setIsItemModalOpen(true); }}
+          onEdit={(item) => {
+            setEditingItem(item);
+            setIsItemModalOpen(true);
+          }}
         />
       </main>
 
-      {/* ③-1 / ③-2 登録・編集モーダル */}
+      {/* ③-1 新規登録 / ③-2 登録情報の変更 */}
       {isItemModalOpen && (
         <ItemModal
           item={editingItem}
-          onClose={() => setIsItemModalOpen(false)}
+          onClose={() => {
+            setIsItemModalOpen(false);
+            setEditingItem(null);
+          }}
           onSave={handleSaveItem}
         />
       )}
 
-      {/* ④ しぼり込みモーダル */}
+      {/* ④ しぼり込み */}
       {isFilterModalOpen && (
         <FilterModal
-          currentMaker={filterMaker}
-          onApply={(maker) => { setFilterMaker(maker); setIsFilterModalOpen(false); }}
+          makers={makers}
+          current={filter}
+          onApply={(f) => {
+            setFilter(f);
+            setIsFilterModalOpen(false);
+          }}
           onClose={() => setIsFilterModalOpen(false)}
         />
       )}
 
-      {/* レイアウト設定モーダル */}
+      {/* レイアウト設定 */}
       {isSettingsOpen && (
-        <LayoutSettingsModal
-          settings={settings}
-          onSave={(newSettings) => { setSettings(newSettings); setIsSettingsOpen(false); }}
-          onClose={() => setIsSettingsOpen(false)}
-        />
+        <LayoutSettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setIsSettingsOpen(false)} />
       )}
     </div>
   );
