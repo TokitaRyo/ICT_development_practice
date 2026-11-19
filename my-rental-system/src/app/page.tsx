@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
+import AuthForm from '@/components/AuthForm';
 import Header from '@/components/Header';
 import ItemTable from '@/components/ItemTable';
 import ItemModal from '@/components/ItemModal';
@@ -21,10 +22,6 @@ export default function Home() {
   // 認証
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [loggingIn, setLoggingIn] = useState(false);
 
   // データ
   const [items, setItems] = useState<Item[]>([]);
@@ -43,10 +40,11 @@ export default function Home() {
 
   // 1. ログイン状態の監視
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setAuthReady(true);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data }) => setSession(data.session))
+      .catch(() => setSession(null))
+      .finally(() => setAuthReady(true));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
     });
@@ -119,16 +117,6 @@ export default function Home() {
 
   const isFiltered = filter.maker !== '' || filter.stock !== 'all';
 
-  // ログイン
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoggingIn(true);
-    setLoginError('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoggingIn(false);
-    if (error) setLoginError('ログインに失敗しました: ' + error.message);
-  };
-
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setItems([]);
@@ -160,36 +148,10 @@ export default function Home() {
     if (error) setErrorMessage('設定の保存に失敗しました: ' + error.message);
   };
 
-  if (!authReady) return null;
+  if (!authReady) return <p className="p-6 muted">読み込み中...</p>;
 
-  // ① ログイン画面
-  if (!session) {
-    return (
-      <div className="app flex items-center justify-center">
-        <form onSubmit={handleLogin} className="surface p-8 w-96 shadow-md">
-          <h1 className="text-xl font-bold mb-6 text-center">物貸し借りシステム ログイン</h1>
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-1">ID (Email)</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="field" required />
-          </div>
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-1">Ps (Password)</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="field"
-              required
-            />
-          </div>
-          {loginError && <p className="error-text text-sm mb-4">{loginError}</p>}
-          <button type="submit" disabled={loggingIn} className="btn btn-primary w-full">
-            {loggingIn ? 'ログイン中...' : 'ログイン'}
-          </button>
-        </form>
-      </div>
-    );
-  }
+  // ① ログイン / 新規登録画面
+  if (!session) return <AuthForm />;
 
   // ② 一覧画面
   return (
