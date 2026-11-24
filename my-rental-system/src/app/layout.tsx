@@ -1,15 +1,18 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import AppShell from '@/components/AppShell';
 
 export const metadata: Metadata = {
-  title: '物貸し借りシステム',
-  description: '物品の貸し借りを管理するシステム',
+  title: '文房具在庫管理システム',
+  description: '文房具の在庫を管理するシステム',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body>
+        <AppShell>{children}</AppShell>
+      </body>
     </html>
   );
 }

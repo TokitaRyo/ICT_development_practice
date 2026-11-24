@@ -108,7 +108,7 @@ export default function AuthForm() {
   return (
     <div className="app flex items-center justify-center p-4">
       <form onSubmit={handleSubmit} className="surface p-8 w-full max-w-sm shadow-md">
-        <h1 className="text-xl font-bold mb-6 text-center">物貸し借りシステム</h1>
+        <h1 className="text-xl font-bold mb-6 text-center">文房具在庫管理システム</h1>
 
         <div className="flex mb-6">
           {tab('login', 'ログイン')}

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { COLUMN_LABELS, type Item, type UserSettings } from '@/lib/types';
 
 interface ItemTableProps {
@@ -8,7 +9,6 @@ interface ItemTableProps {
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: (checked: boolean) => void;
-  onEdit: (item: Item) => void;
 }
 
 const PADDING = {
@@ -28,7 +28,7 @@ function renderValue(item: Item, column: string) {
     case 'serial_number':
       return item.serial_number || '-';
     default:
-      return String((item as unknown as Record<string, unknown>)[column] ?? '-');
+      return String((item as unknown as Record<string, unknown>)[column] || '-');
   }
 }
 
@@ -38,7 +38,6 @@ export default function ItemTable({
   selectedIds,
   onToggleSelect,
   onToggleSelectAll,
-  onEdit,
 }: ItemTableProps) {
   const columns = Object.keys(COLUMN_LABELS).filter((c) => settings.visible_columns.includes(c));
   const pad = PADDING[settings.density];
@@ -93,9 +92,9 @@ export default function ItemTable({
                     </div>
                   ))}
                 </dl>
-                <button onClick={() => onEdit(item)} className="link-button mt-3 text-sm">
-                  変更
-                </button>
+                <Link href={`/items/${item.id}`} className="link-button mt-3 inline-block text-sm">
+                  詳細・編集
+                </Link>
               </div>
             );
           })}
@@ -137,9 +136,9 @@ export default function ItemTable({
                   </td>
                 ))}
                 <td className={`${pad} text-right`}>
-                  <button onClick={() => onEdit(item)} className="link-button">
-                    変更
-                  </button>
+                  <Link href={`/items/${item.id}`} className="link-button">
+                    詳細・編集
+                  </Link>
                 </td>
               </tr>
             );

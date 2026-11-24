@@ -11,7 +11,6 @@ export interface Item {
 
 /** 登録・更新時にフォームから渡す値 */
 export interface ItemInput {
-  item_number: string;
   maker: string;
   name: string;
   serial_number: string | null;
@@ -38,10 +37,10 @@ export const DEFAULT_SETTINGS: UserSettings = {
 };
 
 export const COLUMN_LABELS: Record<string, string> = {
-  item_number: '番号',
-  maker: 'メーカー',
-  name: '商品名',
-  serial_number: '製造番号',
+  item_number: '管理番号',
+  maker: 'メーカー名',
+  name: '製品名',
+  serial_number: '製品番号',
   price: '単価',
   stock_count: '在庫数',
 };

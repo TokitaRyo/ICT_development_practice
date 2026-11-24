@@ -1,105 +1,46 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
-import AuthForm from '@/components/AuthForm';
+import { useApp } from '@/components/AppContext';
 import DeleteConfirmModal from '@/components/DeleteConfirmModal';
-import Header from '@/components/Header';
-import ItemTable from '@/components/ItemTable';
-import ItemModal from '@/components/ItemModal';
 import FilterModal from '@/components/FilterModal';
-import LayoutSettingsModal from '@/components/LayoutSettingsModal';
-import {
-  DEFAULT_FILTER,
-  DEFAULT_SETTINGS,
-  type Item,
-  type ItemFilter,
-  type ItemInput,
-  type UserSettings,
-} from '@/lib/types';
+import ItemTable from '@/components/ItemTable';
+import { DEFAULT_FILTER, type Item, type ItemFilter } from '@/lib/types';
 
-export default function Home() {
-  // 認証
-  const [session, setSession] = useState<Session | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+/** ① 在庫一覧・検索画面 */
+export default function ItemListPage() {
+  const { settings } = useApp();
 
-  // データ
   const [items, setItems] = useState<Item[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<ItemFilter>(DEFAULT_FILTER);
-  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
-
-  // モーダル
-  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const userId = session?.user.id;
-
-  // 1. ログイン状態の監視
+  // 物品一覧の取得（画面表示時と、削除後）
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(({ data }) => setSession(data.session))
-      .catch(() => setSession(null))
-      .finally(() => setAuthReady(true));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  // 2. 物品一覧の取得
-  const fetchItems = useCallback(async () => {
-    const { data, error } = await supabase.from('items').select('*').order('created_at', { ascending: false });
-    if (error) {
-      setErrorMessage('物品の取得に失敗しました: ' + error.message);
-      return;
-    }
-    setErrorMessage('');
-    setItems((data ?? []) as Item[]);
-  }, []);
-
-  // 3. ログイン後に一覧とレイアウト設定を読み込む
-  useEffect(() => {
-    if (!userId) return;
     let cancelled = false;
     (async () => {
-      const [itemsRes, settingsRes] = await Promise.all([
-        supabase.from('items').select('*').order('created_at', { ascending: false }),
-        supabase
-          .from('user_settings')
-          .select('theme, view_mode, density, visible_columns')
-          .eq('user_id', userId)
-          .maybeSingle(),
-      ]);
+      const { data, error } = await supabase.from('items').select('*').order('item_number', { ascending: true });
       if (cancelled) return;
-      if (itemsRes.error) {
-        setErrorMessage('物品の取得に失敗しました: ' + itemsRes.error.message);
+      if (error) {
+        setErrorMessage('物品の取得に失敗しました: ' + error.message);
       } else {
         setErrorMessage('');
-        setItems((itemsRes.data ?? []) as Item[]);
+        setItems((data ?? []) as Item[]);
       }
-      const saved = settingsRes.data;
-      if (saved) {
-        setSettings({
-          ...DEFAULT_SETTINGS,
-          ...saved,
-          visible_columns: Array.isArray(saved.visible_columns)
-            ? saved.visible_columns
-            : DEFAULT_SETTINGS.visible_columns,
-        } as UserSettings);
-      }
+      setLoaded(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [reloadKey]);
 
   const makers = useMemo(
     () => Array.from(new Set(items.map((i) => i.maker).filter(Boolean))).sort(),
@@ -118,7 +59,7 @@ export default function Home() {
     });
   }, [items, searchQuery, filter]);
 
-  const isFiltered = filter.maker !== '' || filter.stock !== 'all';
+  const isFiltered = filter.maker !== '';
 
   // 選択（表示中の物品だけを対象にする。しぼり込みで隠れた物品は削除されない）
   const selectedItems = useMemo(() => filteredItems.filter((i) => selectedIds.has(i.id)), [filteredItems, selectedIds]);
@@ -144,116 +85,69 @@ export default function Home() {
     const { data, error } = await supabase.from('items').delete().in('id', ids).select('id');
     if (error) return '削除に失敗しました: ' + error.message;
     const deleted = data?.length ?? 0;
-    await fetchItems();
+    setReloadKey((k) => k + 1);
     if (deleted !== ids.length) return `一部の物品を削除できませんでした（${ids.length}件中${deleted}件を削除）`;
     setSelectedIds(new Set());
     setIsDeleteModalOpen(false);
     return null;
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setSelectedIds(new Set());
-    setItems([]);
-    setSettings(DEFAULT_SETTINGS);
-    setFilter(DEFAULT_FILTER);
-    setSearchQuery('');
-  };
-
-  // 登録・変更（成功時 null / 失敗時メッセージ）
-  const handleSaveItem = async (formData: ItemInput): Promise<string | null> => {
-    const { error } = editingItem
-      ? await supabase.from('items').update(formData).eq('id', editingItem.id)
-      : await supabase.from('items').insert([formData]);
-    if (error) return '保存に失敗しました: ' + error.message;
-    await fetchItems();
-    setIsItemModalOpen(false);
-    setEditingItem(null);
-    return null;
-  };
-
-  // レイアウト設定の保存（user_settings に upsert）
-  const handleSaveSettings = async (newSettings: UserSettings) => {
-    setSettings(newSettings);
-    setIsSettingsOpen(false);
-    if (!userId) return;
-    const { error } = await supabase
-      .from('user_settings')
-      .upsert({ user_id: userId, ...newSettings, updated_at: new Date().toISOString() });
-    if (error) setErrorMessage('設定の保存に失敗しました: ' + error.message);
-  };
-
-  if (!authReady) return <p className="p-6 muted">読み込み中...</p>;
-
-  // ① ログイン / 新規登録画面
-  if (!session) return <AuthForm />;
-
-  // ② 一覧画面
   return (
-    <div className={`app theme-${settings.theme}`}>
-      <Header email={session.user.email} onOpenSettings={() => setIsSettingsOpen(true)} onLogout={handleLogout} />
+    <div>
+      {errorMessage && <p className="error-text text-sm mb-4">{errorMessage}</p>}
 
-      <main className="max-w-7xl mx-auto p-6">
-        {errorMessage && <p className="error-text text-sm mb-4">{errorMessage}</p>}
-
-        <div className="surface flex flex-wrap gap-4 justify-between items-center mb-6 p-4">
+      <div className="surface flex flex-wrap gap-4 justify-between items-center mb-6 p-4">
+        <div className="flex flex-wrap items-center gap-4">
           <input
             type="text"
-            placeholder="けんさく（商品名・メーカー・番号・製造番号）"
+            placeholder="キーワード（製品名・メーカー名）"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="field sm:w-80"
+            className="field sm:w-72"
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="muted text-sm">{filteredItems.length} / {items.length} 件</span>
-            {selectedItems.length > 0 && (
-              <>
-                <button onClick={() => setSelectedIds(new Set())} className="link-button text-sm">
-                  選択解除
-                </button>
-                <button onClick={() => setIsDeleteModalOpen(true)} className="btn btn-danger">
-                  選択した{selectedItems.length}件を削除
-                </button>
-              </>
-            )}
-            <button onClick={() => setIsFilterModalOpen(true)} className="btn btn-secondary">
-              しぼり込み{isFiltered && '（適用中）'}
-            </button>
-            <button
-              onClick={() => {
-                setEditingItem(null);
-                setIsItemModalOpen(true);
-              }}
-              className="btn btn-primary"
-            >
-              新規登録
-            </button>
-          </div>
+          <label className="text-sm">
+            <input
+              type="checkbox"
+              checked={filter.stock === 'out'}
+              onChange={(e) => setFilter({ ...filter, stock: e.target.checked ? 'out' : 'all' })}
+            />{' '}
+            在庫切れのみ
+          </label>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="muted text-sm">
+            {filteredItems.length} / {items.length} 件
+          </span>
+          {selectedItems.length > 0 && (
+            <>
+              <button onClick={() => setSelectedIds(new Set())} className="link-button text-sm">
+                選択解除
+              </button>
+              <button onClick={() => setIsDeleteModalOpen(true)} className="btn btn-danger">
+                選択した{selectedItems.length}件を削除
+              </button>
+            </>
+          )}
+          <button onClick={() => setIsFilterModalOpen(true)} className="btn btn-secondary">
+            メーカーでしぼり込み{isFiltered && '（適用中）'}
+          </button>
+          <Link href="/items/new" className="btn btn-primary">
+            新規登録
+          </Link>
+        </div>
+      </div>
+
+      {loaded ? (
         <ItemTable
           items={filteredItems}
           settings={settings}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onToggleSelectAll={toggleSelectAll}
-          onEdit={(item) => {
-            setEditingItem(item);
-            setIsItemModalOpen(true);
-          }}
         />
-      </main>
-
-      {/* ③-1 新規登録 / ③-2 登録情報の変更 */}
-      {isItemModalOpen && (
-        <ItemModal
-          item={editingItem}
-          onClose={() => {
-            setIsItemModalOpen(false);
-            setEditingItem(null);
-          }}
-          onSave={handleSaveItem}
-        />
+      ) : (
+        <p className="muted">読み込み中...</p>
       )}
 
       {/* 選択した物品の一括削除 */}
@@ -265,7 +159,7 @@ export default function Home() {
         />
       )}
 
-      {/* ④ しぼり込み */}
+      {/* メーカーでしぼり込み */}
       {isFilterModalOpen && (
         <FilterModal
           makers={makers}
@@ -276,11 +170,6 @@ export default function Home() {
           }}
           onClose={() => setIsFilterModalOpen(false)}
         />
-      )}
-
-      {/* レイアウト設定 */}
-      {isSettingsOpen && (
-        <LayoutSettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setIsSettingsOpen(false)} />
       )}
     </div>
   );
