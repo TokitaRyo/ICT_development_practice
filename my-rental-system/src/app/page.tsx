@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import AuthForm from '@/components/AuthForm';
+import DeleteConfirmModal from '@/components/DeleteConfirmModal';
 import Header from '@/components/Header';
 import ItemTable from '@/components/ItemTable';
 import ItemModal from '@/components/ItemModal';
@@ -35,6 +36,8 @@ export default function Home() {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const userId = session?.user.id;
 
@@ -117,8 +120,40 @@ export default function Home() {
 
   const isFiltered = filter.maker !== '' || filter.stock !== 'all';
 
+  // 選択（表示中の物品だけを対象にする。しぼり込みで隠れた物品は削除されない）
+  const selectedItems = useMemo(() => filteredItems.filter((i) => selectedIds.has(i.id)), [filteredItems, selectedIds]);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleSelectAll = (checked: boolean) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredItems.forEach((i) => (checked ? next.add(i.id) : next.delete(i.id)));
+      return next;
+    });
+
+  // 一括削除（成功時 null / 失敗時メッセージ）
+  const handleDeleteSelected = async (): Promise<string | null> => {
+    const ids = selectedItems.map((i) => i.id);
+    const { data, error } = await supabase.from('items').delete().in('id', ids).select('id');
+    if (error) return '削除に失敗しました: ' + error.message;
+    const deleted = data?.length ?? 0;
+    await fetchItems();
+    if (deleted !== ids.length) return `一部の物品を削除できませんでした（${ids.length}件中${deleted}件を削除）`;
+    setSelectedIds(new Set());
+    setIsDeleteModalOpen(false);
+    return null;
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    setSelectedIds(new Set());
     setItems([]);
     setSettings(DEFAULT_SETTINGS);
     setFilter(DEFAULT_FILTER);
@@ -169,8 +204,18 @@ export default function Home() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="field sm:w-80"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="muted text-sm">{filteredItems.length} / {items.length} 件</span>
+            {selectedItems.length > 0 && (
+              <>
+                <button onClick={() => setSelectedIds(new Set())} className="link-button text-sm">
+                  選択解除
+                </button>
+                <button onClick={() => setIsDeleteModalOpen(true)} className="btn btn-danger">
+                  選択した{selectedItems.length}件を削除
+                </button>
+              </>
+            )}
             <button onClick={() => setIsFilterModalOpen(true)} className="btn btn-secondary">
               しぼり込み{isFiltered && '（適用中）'}
             </button>
@@ -189,6 +234,9 @@ export default function Home() {
         <ItemTable
           items={filteredItems}
           settings={settings}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onToggleSelectAll={toggleSelectAll}
           onEdit={(item) => {
             setEditingItem(item);
             setIsItemModalOpen(true);
@@ -205,6 +253,15 @@ export default function Home() {
             setEditingItem(null);
           }}
           onSave={handleSaveItem}
+        />
+      )}
+
+      {/* 選択した物品の一括削除 */}
+      {isDeleteModalOpen && (
+        <DeleteConfirmModal
+          items={selectedItems}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onConfirm={handleDeleteSelected}
         />
       )}
 

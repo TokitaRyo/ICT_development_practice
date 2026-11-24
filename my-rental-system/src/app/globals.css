@@ -136,3 +136,12 @@
   background: rgb(0 0 0 / 0.45);
   padding: 1rem;
 }
+
+.btn-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
